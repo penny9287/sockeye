@@ -255,6 +255,14 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
                                        "with %s." % (C.TRAINING_ARG_SOURCE,
                                                      C.TRAINING_ARG_TARGET,
                                                      C.TRAINING_ARG_PREPARED_DATA)
+
+    competence = data_io.Competence(kind=args.competence_kind,
+                                    max_epochs=args.curriculum_epochs,
+                                    init_competence=args.competence_init_value) \
+    if args.difficulty is not None or \
+       (args.prepared_data is not None and args.competence_kind is not None) \
+         else None
+
     if args.prepared_data is not None:
         utils.check_condition(args.source is None and args.target is None, either_raw_or_prepared_error_msg)
         if not resume_training:
@@ -270,6 +278,7 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             batch_by_words=batch_by_words,
             batch_num_devices=batch_num_devices,
             batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of)
+            #competence=competence)
 
         check_condition(args.source_factors_combine == C.SOURCE_FACTORS_COMBINE_SUM \
                         or len(source_vocabs) == len(args.source_factors_num_embed) + 1,
@@ -354,13 +363,20 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             bucketing=not args.no_bucketing,
             bucket_width=args.bucket_width,
             bucket_scaling=not args.no_bucket_scaling,
-            batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of)
+            batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of,
+            difficulties=args.difficulty)
+#            competence=competence)
 
         data_info_fname = os.path.join(output_folder, C.DATA_INFO)
         logger.info("Writing data config to '%s'", data_info_fname)
         data_info.save(data_info_fname)
 
-        return train_iter, validation_iter, config_data, source_vocabs, target_vocab
+    # let the competence instance know about the data size
+    if competence is not None:
+        competence.init(data_config.data_statistics.num_sents)
+        logger.info("Using curriculum learning")
+
+    return train_iter, validation_iter, data_config, source_vocabs, target_vocab
 
 
 def create_encoder_config(args: argparse.Namespace,

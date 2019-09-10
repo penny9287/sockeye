@@ -188,6 +188,10 @@ class GluonEarlyStoppingTrainer:
             utils.check_condition(checkpoint_decoder is not None,
                                   "%s requires CheckpointDecoder" % self.config.early_stopping_metric)
 
+        if getattr(train_iter, 'competence', None) is not None:
+            logger.info("Training with curriculum learning with the %s competence kind, "
+                        "initial competence value: %f." % (train_iter.competence.kind, train_iter.competence.value()))
+
         resume_training = os.path.exists(self.training_state_dirname)
         if resume_training:
             logger.info("Found partial training in '%s'. Resuming from saved state.", self.training_state_dirname)

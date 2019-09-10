@@ -32,6 +32,7 @@ from itertools import zip_longest
      dict(source='test_src', target='test_tgt',
           source_factors=[],
           prepared_data='prep_data',
+          difficulty=None,
           validation_source='test_validation_src', validation_target='test_validation_tgt',
           validation_source_factors=[],
           output='test_output', overwrite_output=False,
@@ -47,6 +48,7 @@ from itertools import zip_longest
      dict(source='test_src', target='test_tgt',
           source_factors=[],
           prepared_data='prep_data',
+          difficulty=None,
           validation_source='test_validation_src', validation_target='test_validation_tgt',
           validation_source_factors=[],
           output='test_output', overwrite_output=False,
@@ -100,6 +102,15 @@ def test_device_args(test_params, expected_params):
 def test_model_parameters(test_params, expected_params):
     _test_args(test_params, expected_params, arguments.add_model_parameters)
 
+
+@pytest.mark.parametrize("test_params, expected_params", [
+    ('--bandit-kind ucb --exploration-epochs 10',
+     dict(bandit_kind='ucb', exploration_epochs=10)),
+    ('--bandit-kind ts --exploration-epochs 11',
+     dict(bandit_kind='ts', exploration_epochs=11))
+     ])
+def test_curriculum_args(test_params, expected_params):
+    _test_args(test_params, expected_params, arguments.add_curriculum_args)
 
 @pytest.mark.parametrize("test_params, expected_params", [
     ('-m model', dict(input=None,
@@ -231,6 +242,7 @@ def test_tutorial_averaging_args(test_params, expected_params, expected_params_p
      dict(source='corpus.tc.BPE.de', target='corpus.tc.BPE.en',
           source_vocab=None,
           target_vocab=None,
+          difficulty=None,
           source_factors=[],
           source_factor_vocabs=[],
           shared_vocab=False,
@@ -256,6 +268,7 @@ def test_tutorial_prepare_data_cli_args(test_params, expected_params):
      dict(source='test_src', target='test_tgt',
           source_vocab=None,
           target_vocab=None,
+          difficulty=None,
           source_factors=[],
           source_factor_vocabs=[],
           shared_vocab=False,
@@ -289,7 +302,7 @@ def _create_argument_values_that_must_be_files_or_dirs(params):
     params = params.split()
     regular_files_params = {'-vs', '-vt', '-t', '-s', '--source', '--target',
                             '--validation-source', '--validation-target',
-                            '--input', '-i'}
+                            '--input', '-i', '--difficulty', '-df'}
     folder_params = {'--prepared-data', '-d', '--image-root', '-ir',
                      '--validation-source-root', '-vsr', '--source-root', '-sr'}
     to_unlink = set()

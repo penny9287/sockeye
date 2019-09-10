@@ -365,6 +365,25 @@ def add_training_data_args(params, required=False):
                         required=required,
                         type=regular_file(),
                         help='Target side of parallel training data.')
+    params.add_argument(C.TRAINING_ARG_DIFFICULTY, '-df',
+                        required=False,
+                        default=None,
+                        type=regular_file(),
+                        help='Sentence difficulties of parallel training data for curriculum learning (one json per line).')
+
+
+def add_curriculum_args(params):
+    params.add_argument("--bandit-kind",
+                        required=False,
+                        default=None,
+                        choices=['linucb', 'ucb', 'ts', 'lints', 'exp3s', 'linexp3s'],
+                        type=str,
+                        help='Type of the bandit.')
+    params.add_argument("--exploration-epochs",
+                        required=False,
+                        default=1,
+                        type=int,
+                        help='The number of epochs to explore before starting curriculum. Default: %(default)s.')
 
 
 def add_validation_data_params(params):

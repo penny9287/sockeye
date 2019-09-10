@@ -221,6 +221,7 @@ ARGS_MAY_DIFFER = ["overwrite_output", "use_tensorboard", "quiet",
 # Other argument constants
 TRAINING_ARG_SOURCE = "--source"
 TRAINING_ARG_TARGET = "--target"
+TRAINING_ARG_DIFFICULTY = "--difficulty"
 TRAINING_ARG_PREPARED_DATA = "--prepared-data"
 TRAINING_ARG_MAX_SEQ_LEN = "--max-seq-len"
 
@@ -396,3 +397,6 @@ AVERAGE_CHOICES = [AVERAGE_BEST, AVERAGE_LAST, AVERAGE_LIFESPAN]
 BREVITY_PENALTY_CONSTANT = 'constant'
 BREVITY_PENALTY_LEARNED = 'learned'
 BREVITY_PENALTY_NONE = 'none'
+
+# currriculum learning
+CONSTANT_DIFFICULTY_VALUE = 0.0
