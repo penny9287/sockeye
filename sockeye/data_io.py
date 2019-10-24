@@ -947,8 +947,7 @@ def get_training_data_iters(sources: List[str],
                                                   buckets=buckets,
                                                   batch_size=batch_size,
                                                   bucket_batch_sizes=bucket_batch_sizes,
-                                                  num_factors=len(sources),
-                                                  competence=competence)
+                                                  num_factors=len(sources))
 
     validation_iter = get_validation_data_iter(data_loader=data_loader,
                                                validation_sources=validation_sources,
@@ -1286,8 +1285,7 @@ class SequenceReader(Iterable):
 
 class JsonReader(Iterable):
     """
-    Reads json-vectors from path.
-    Streams from disk, instead of loading all samples into memory.
+    Reads json'ed dictionaries from path. Streams from disk, instead of loading all samples into memory.
     Empty jsons or lines are yielded as None.
 
     :param path: Path to read data from.
@@ -1297,17 +1295,14 @@ class JsonReader(Iterable):
 
     def __init__(self,
                  path: str,
-                 mapping: Dict[str, int],
+                 mapping: Optional[Dict[str, int]],
                  limit: Optional[int] = None) -> None:
         self.path = path
         self.limit = limit
-        if mapping is not None:
-            self.mapping = mapping
-        else:
-            self.mapping = dict()
+        self.mapping = mapping if mapping is not None else dict()  # type: Dict[str, int]
         # we assume that the dimension doesn't change and
         # read just first line to get to know it
-        self.dim = self.peek_dimension()
+        self.dim = self._peek_dimension()
 
     def __iter__(self):
         for json_dict in read_json_lines(self.path, self.limit):
@@ -1318,17 +1313,17 @@ class JsonReader(Iterable):
             if self.dim == 0:
                 yield None
                 continue
-            vector = dict2vec(json_dict, self.mapping)
-            yield vector
+            yield dict2vec(json_dict, self.mapping)
 
-    def peek_dimension(self):
+    def _peek_dimension(self):
         with smart_open(self.path) as f:
             return len(read_json_lines(f, 1))
 
 def create_sequence_readers(sources: List[str], target: str,
                             vocab_sources: List[vocab.Vocab],
                             vocab_target: vocab.Vocab,
-                            difficulties: Optional[str] = None) -> Tuple[List[SequenceReader], SequenceReader, Union[SequenceReader, Iterable]]:
+                            difficulties: Optional[str] = None) -> Tuple[List[SequenceReader], SequenceReader,
+                                                                         Union[SequenceReader, Iterable]]:
     """
     Create source readers with EOS and target readers with BOS.
 
@@ -1342,7 +1337,7 @@ def create_sequence_readers(sources: List[str], target: str,
     source_sequence_readers = [SequenceReader(source, vocab, add_eos=True) for source, vocab in
                                zip(sources, vocab_sources)]
     target_sequence_reader = SequenceReader(target, vocab_target, add_bos=True)
-    difficulty_reader = None  # type: Union[SequenceReader, Iterable]
+    difficulty_reader = None  # type: Union[JsonReader, Iterable]
     if difficulties is None:
         difficulty_reader = repeat([C.CONSTANT_DIFFICULTY_VALUE])
     else:
@@ -1499,15 +1494,15 @@ class ParallelDataSet(Sized):
         if difficulties is None:
             check_condition(len(source) == len(target),
                 "Number of buckets for source/target do not match: %d/%d." % (len(source), len(target)))
-            for s in source:
-                print(s.shape)
-                a = mx.nd.full((s.shape[0]), val=C.CONSTANT_DIFFICULTY_VALUE)
+            #for s in source:
+            #    print(s.shape)
+            #    a = mx.nd.full((s.shape[0]), val=C.CONSTANT_DIFFICULTY_VALUE)
             difficulties = [mx.nd.full((s.shape[0]), val=C.CONSTANT_DIFFICULTY_VALUE) for s in source]
         else:
-            check_condition(len(source) == len(target) == len(label) == len(difficulties),
-                "Number of buckets for source/target/label/difficulties do not match: %d/%d/%d." % (len(source),
-                                                                                                    len(target),
-                                                                                                    len(difficulties)))
+            check_condition(len(source) == len(target) == len(difficulties),
+                "Number of buckets for source/target/difficulties do not match: %d/%d/%d." % (len(source),
+                                                                                              len(target),
+                                                                                              len(difficulties)))
 
         self.source = source
         self.target = target
@@ -1523,7 +1518,7 @@ class ParallelDataSet(Sized):
         """
         Saves the dataset to a binary .npy file.
         """
-        # TODO if difficulties are all the same, this is slighly space-inefficient to store them like this
+        # TODO: when difficulties are all the same, this is slighly space-inefficient to store them like this
         mx.nd.save(fname, self.source + self.target + self.difficulties)
 
     @staticmethod
@@ -1537,6 +1532,7 @@ class ParallelDataSet(Sized):
         source = data[:n]
         target = data[n:2 * n]
         if horovod_mpi.using_horovod() and horovod_mpi.hvd.size() > 1:
+            assert self.difficulties is None  # not implemented for difficulties
             split_index = horovod_mpi.hvd.rank()
             total_splits = horovod_mpi.hvd.size()
             i = split_index / total_splits
@@ -1550,10 +1546,9 @@ class ParallelDataSet(Sized):
             target = [t[math.floor(i * t.shape[0]):math.floor(j * t.shape[0])]
                       if t.shape[0] > 0
                       else t for t in target]
-            assert False  # not implemented for difficulties
         difficulties = data[2 * n:]
         assert len(source) == len(target) == len(difficulties)
-        return ParallelDataSet(source, target, label, difficulties)
+        return ParallelDataSet(source, target, difficulties)
 
     def fill_up(self,
                 bucket_batch_sizes: List[BucketBatchSize],
@@ -1630,7 +1625,7 @@ class ParallelDataSet(Sized):
                 target.append(self.target[buck_idx])
                 difficulties.append(self.difficulties[buck_idx])
 
-        return ParallelDataSet(source, target, label, difficulties)
+        return ParallelDataSet(source, target, difficulties)
 
 
 def get_permutations(bucket_counts: List[int]) -> Tuple[List[mx.nd.NDArray], List[mx.nd.NDArray]]:
@@ -2106,3 +2101,170 @@ def create_batch_from_parallel_sample(source: mx.nd.NDArray, target: mx.nd.NDArr
     labels = {C.TARGET_LABEL_NAME: label, C.LENRATIO_LABEL_NAME: length_ratio}
 
     return Batch(source, source_length, target, target_length, labels, samples, tokens)
+
+
+class ShardedParallelCurriculumSampleIter(ShardedParallelSampleIter):
+    """
+    Goes through the data one shard at a time. The memory consumption is limited by the memory consumption of the
+    largest shard. The order in which data in shards are traversed is defined by difficulties, but the shard order is
+    not dependent of them.
+    """
+
+    def __init__(self,
+                 shards_fnames: List[str],
+                 buckets,
+                 batch_size,
+                 bucket_batch_sizes,
+                 source_data_name=C.SOURCE_NAME,
+                 target_data_name=C.TARGET_NAME,
+                 label_name=C.TARGET_LABEL_NAME,
+                 num_factors: int = 1,
+                 permute: bool = True,
+                 dtype='float32') -> None:
+        super().__init__(shards_fnames, buckets=buckets, batch_size=batch_size, bucket_batch_sizes=bucket_batch_sizes,
+                         source_data_name=source_data_name, target_data_name=target_data_name,
+                         label_name=label_name, num_factors=num_factors, permute=permute, dtype=dtype)
+        assert len(shards_fnames) > 0
+        self.shards_fnames = list(shards_fnames)
+        self.shard_index = -1
+
+        self.reset()
+
+    def _load_shard(self):
+        shard_fname = self.shards_fnames[self.shard_index]
+        logger.info("Loading shard %s.", shard_fname)
+        dataset = ParallelDataSet.load(self.shards_fnames[self.shard_index]).fill_up(self.bucket_batch_sizes,
+                                                                                     seed=self.shard_index)
+        if not self.competence.fully_competent():
+            self.shard_iter = ParallelCurriculumSampleIter(data=dataset,
+                                                           buckets=self.buckets,
+                                                           batch_size=self.batch_size,
+                                                           bucket_batch_sizes=self.bucket_batch_sizes,
+                                                           source_data_name=self.source_data_name,
+                                                           target_data_name=self.target_data_name,
+                                                           num_factors=self.num_factors,
+                                                           permute=self.permute,
+                                                           dtype=self.dtype)
+        else:
+            self.shard_iter = ParallelSampleIter(data=dataset,
+                                                 buckets=self.buckets,
+                                                 batch_size=self.batch_size,
+                                                 bucket_batch_sizes=self.bucket_batch_sizes,
+                                                 source_data_name=self.source_data_name,
+                                                 target_data_name=self.target_data_name,
+                                                 num_factors=self.num_factors,
+                                                 permute=self.permute,
+                                                 dtype=self.dtype)
+
+
+class ParallelCurriculumSampleIter(ParallelSampleIter):
+    """
+    Data iterator on a bucketed ParallelDataSet that support curriculum learning based on uniform sampling without replacement.
+    Used for presenting data in difficulty order. Inherits support for saving and loading the iterator state.
+
+    :param data: TODO
+    """
+
+    def __init__(self,
+                 data: ParallelDataSet,
+                 buckets,
+                 batch_size,
+                 bucket_batch_sizes,
+                 source_data_name=C.SOURCE_NAME,
+                 target_data_name=C.TARGET_NAME,
+                 label_name=C.TARGET_LABEL_NAME,
+                 permute: bool = True,
+                 num_factors: int = 1,
+                 dtype='float32') -> None:
+        # initialize the normal ParallelDataSet
+        super().__init__(data=data, buckets=buckets, batch_size=batch_size, bucket_batch_sizes=bucket_batch_sizes,
+                         source_data_name=source_data_name, target_data_name=target_data_name,
+                         label_name=label_name, num_factors=num_factors, permute=permute, dtype=dtype)
+        # replace independent lists to be sorted by difficulty
+        self.data = ParallelDataSet(list(data.source), list(data.target), list(data.label), list(data.difficulties))
+        self.reset()
+
+    def iter_next(self) -> bool:
+        """
+        Once we returned as many batches as self.curr_batch_index, meaning the latter does not grow because the following
+        batches' difficulties are too high, we stop.
+        """
+        if self.use_competency:
+            return self.batches_returned <= self.curr_batch_index
+        return super().iter_next()
+
+    def next(self) -> mx.io.DataBatch:
+        """
+        Returns the next batch from the data iterator checking for current competency.
+        """
+        if not self.iter_next():
+            raise StopIteration
+
+        if self.use_competency:
+            # shift the pointer forward until the difficulty is not over the current competence
+            while super().iter_next() and self.batch_indices[self.curr_batch_index][2] < self.competence.value():
+                self.curr_batch_index += 1
+            # sample a batch uniformly from data whose difficulty is under the competence
+            i, j, p = random.choice(self.batch_indices[:self.curr_batch_index])
+            # increase competence level
+            self.competence.increment(self.bucket_batch_sizes[i].batch_size)
+            self.batches_returned += 1
+        else:
+            i, j, _ = self.batch_indices[self.curr_batch_index]
+            self.curr_batch_index += 1
+
+        return self._make_mxnet_databatch(i, j)
+
+    def reset(self):
+        # replace independent lists to be sorted by difficulty
+        super().reset()
+
+        if not self.competence.fully_competent():
+            self.batches_returned = 0
+            self.batch_indices = get_batch_indices(self.data, self.bucket_batch_sizes)
+            self._difficulty_sort()
+            self.use_competency = True
+        else:
+            self.use_competency = False
+
+    def load_state(self, fname: str):
+        """
+        Load the state and apply sorting on top of saved data permutations.
+        """
+        super().load_state(fname)
+        if self.use_competency:
+            self._difficulty_sort()
+
+    def _avg_difficulty(self, i, j) -> float:
+        """
+        Average difficulty of the given batch.
+        """
+        batch_size = self.bucket_batch_sizes[i].batch_size
+        return mx.nd.mean(self.data.difficulties[i][j:j + batch_size]).asscalar()
+
+    def _difficulty_sort(self):
+        """
+        Sort sentence in buckets by difficulty and batches by average difficulty.
+        """
+        if not self.competence.fully_competent():
+            # sort sentneces in buckets by difficulty
+            self._data_difficulty_sort()
+            # augement the indices with average difficulty and sort the batches by it
+            self._batch_difficulty_sort()
+
+    def _data_difficulty_sort(self):
+        """
+        Stable sort data by difficulties preserving order of equaly-difficultized data.
+        """
+        # call stable argsort on every bucket
+        data_sort_permutations, _ = get_sorted_permutations(self.data)
+        # permute (i.e. sort)
+        self.data.permute(data_sort_permutations)
+
+    def _batch_difficulty_sort(self):
+        """
+        Augement the indices with average difficulty and sort by it.
+        """
+        batch_indices_difficulty = [(i, j, self._avg_difficulty(i, j)) for i, j in self.batch_indices]
+        self.batch_indices = sorted(batch_indices_difficulty, key=lambda x: x[2])  # type: List[Tuple[int, int, float]]
+
