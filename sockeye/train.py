@@ -85,9 +85,10 @@ def check_arg_compatibility(args: argparse.Namespace):
                          args.max_updates,
                          args.max_checkpoints,
                          args.max_num_epochs,
+                         args.max_seconds,
                          args.max_num_checkpoint_not_improved)),
                     'Please specify at least one stopping criteria: --max-samples --max-updates --max-checkpoints '
-                    '--max-num-epochs --max-num-checkpoint-not-improved')
+                    '--max-seconds --max-num-epochs --max-num-checkpoint-not-improved')
 
 
 def check_resume(args: argparse.Namespace, output_folder: str) -> bool:
@@ -190,6 +191,7 @@ def create_checkpoint_decoder(
     return checkpoint_decoder.CheckpointDecoder(model_folder=args.output,
                                                 inputs=[args.validation_source] + args.validation_source_factors,
                                                 references=args.validation_target,
+                                                difficulties=args.validation_difficulty,
                                                 sample_size=sample_size,
                                                 model=sockeye_model,
                                                 source_vocabs=source_vocabs,
@@ -246,6 +248,7 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
     validation_sources = [args.validation_source] + args.validation_source_factors
     validation_sources = [str(os.path.abspath(source)) for source in validation_sources]
     validation_target = str(os.path.abspath(args.validation_target))
+    validation_difficulty = str(os.path.abspath(args.validation_difficulty))
 
     if args.horovod:
         horovod_data_error_msg = "Horovod training requires prepared training data.  Use `python -m " \
@@ -256,12 +259,14 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
                                                      C.TRAINING_ARG_TARGET,
                                                      C.TRAINING_ARG_PREPARED_DATA)
 
-    competence = data_io.Competence(kind=args.competence_kind,
-                                    max_epochs=args.curriculum_epochs,
-                                    init_competence=args.competence_init_value) \
-    if args.difficulty is not None or \
-       (args.prepared_data is not None and args.competence_kind is not None) \
-         else None
+    bandit_params = None
+    if args.bandit_type != 'none':
+        bandit_params = {'reward_type': args.bandit_reward,
+                         'learn_rate': args.bandit_learn_rate,
+                         'explore_rate': args.bandit_explore_rate,
+                         'time_limit': args.bandit_time_limit,
+                         'tau_normalization': args.bandit_tau,
+                         'no_embeddings': args.bandit_noemb}
 
     if args.prepared_data is not None:
         utils.check_condition(args.source is None and args.target is None, either_raw_or_prepared_error_msg)
@@ -273,12 +278,13 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             prepared_data_dir=args.prepared_data,
             validation_sources=validation_sources,
             validation_target=validation_target,
+            validation_difficulty=validation_difficulty,
             shared_vocab=shared_vocab,
             batch_size=args.batch_size,
             batch_by_words=batch_by_words,
             batch_num_devices=batch_num_devices,
-            batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of)
-            #competence=competence)
+            batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of,
+            bandit_params=bandit_params)
 
         check_condition(args.source_factors_combine == C.SOURCE_FACTORS_COMBINE_SUM \
                         or len(source_vocabs) == len(args.source_factors_num_embed) + 1,
@@ -295,9 +301,10 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             utils.check_condition(vocab.are_identical(target_vocab, model_target_vocab),
                                   "Prepared data and resumed model target vocabs do not match.")
 
-        check_condition(data_config.num_source_factors == len(validation_sources),
-                        'Training and validation data must have the same number of factors, but found %d and %d.' % (
-                            data_config.num_source_factors, len(validation_sources)))
+        if validation_sources is not None:
+            check_condition(data_config.num_source_factors == len(validation_sources),
+                            'Training and validation data must have the same number of factors, but found %d and %d.' % (
+                                data_config.num_source_factors, len(validation_sources)))
 
         return train_iter, validation_iter, data_config, source_vocabs, target_vocab
 
@@ -350,6 +357,7 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             target=os.path.abspath(args.target),
             validation_sources=validation_sources,
             validation_target=validation_target,
+            validation_prepared=validation_prepared,
             source_vocabs=source_vocabs,
             target_vocab=target_vocab,
             source_vocab_paths=source_vocab_paths,
@@ -364,17 +372,12 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             bucket_width=args.bucket_width,
             bucket_scaling=not args.no_bucket_scaling,
             batch_sentences_multiple_of=args.round_batch_sizes_to_multiple_of,
-            difficulties=args.difficulty)
-#            competence=competence)
+            difficulties=args.difficulty,
+            bandit_params=bandit_params)
 
         data_info_fname = os.path.join(output_folder, C.DATA_INFO)
         logger.info("Writing data config to '%s'", data_info_fname)
         data_info.save(data_info_fname)
-
-    # let the competence instance know about the data size
-    if competence is not None:
-        competence.init(data_config.data_statistics.num_sents)
-        logger.info("Using curriculum learning")
 
     return train_iter, validation_iter, data_config, source_vocabs, target_vocab
 
@@ -928,7 +931,7 @@ def train(args: argparse.Namespace, custom_metrics_logger: Optional[Callable] = 
             context=context,
             dtype=args.dtype,
             using_amp=using_amp,
-            custom_metrics_logger=custom_metrics_logger
+            custom_metrics_logger=custom_metrics_logger,
         )
 
         cp_decoder = create_checkpoint_decoder(args, exit_stack, context,

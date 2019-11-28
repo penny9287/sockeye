@@ -35,8 +35,8 @@ FILE_LOGGING = {
             'level': 'INFO',
             'formatter': 'verbose',
             'class': 'logging.handlers.RotatingFileHandler',
-            'maxBytes': 10000000,
-            'backupCount': 5,
+            'maxBytes': 0,
+            'backupCount': 0,
             'filename': 'sockeye.log',
         }
     },
@@ -79,8 +79,8 @@ FILE_CONSOLE_LOGGING = {
             'level': 'INFO',
             'formatter': 'verbose',
             'class': 'logging.handlers.RotatingFileHandler',
-            'maxBytes': 10000000,
-            'backupCount': 5,
+            'maxBytes': 1000000000,
+            'backupCount': 0,
             'filename': 'sockeye.log',
         }
     },

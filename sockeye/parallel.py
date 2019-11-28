@@ -50,7 +50,7 @@ class Parallelizable(object):
             trainer.step()
     """
 
-    def forward_backward(self, x):
+    def forward_backward(self, x, call_backward: bool = True):
         """ Forward and backward computation. """
         raise NotImplementedError()
 
@@ -124,12 +124,12 @@ class Parallel(object):
             self._threads.append(thread)
             thread.start()
 
-    def put(self, x):
+    def put(self, x, call_backward: bool = True):
         """Assign input `x` to an available worker and invoke
         `parallizable.forward_backward` with x. """
         if self._num_serial > 0 or len(self._threads) == 0:
             self._num_serial -= 1
-            out = self._parallizable.forward_backward(x)
+            out = self._parallizable.forward_backward(x, call_backward)
             self._out_queue.put(out)
         else:
             self._in_queue.put(x)

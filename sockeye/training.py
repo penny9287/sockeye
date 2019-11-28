@@ -21,7 +21,6 @@ import pickle
 import random
 import shutil
 import time
-from math import sqrt
 from typing import Callable, Dict, List, Optional, Iterable, Tuple, Union
 
 import mxnet as mx
@@ -42,12 +41,6 @@ from .model import SockeyeModel
 from .optimizers import OptimizerConfig
 
 logger = logging.getLogger(__name__)
-
-
-def global_norm(ndarrays: List[mx.nd.NDArray]) -> float:
-    # accumulate in a list, as asscalar is blocking and this way we can run the norm calculation in parallel.
-    norms = [mx.nd.square(mx.nd.norm(arr)) for arr in ndarrays if arr is not None]
-    return sqrt(sum(norm.asscalar() for norm in norms))
 
 
 class TrainerConfig(Config):
@@ -188,9 +181,9 @@ class GluonEarlyStoppingTrainer:
             utils.check_condition(checkpoint_decoder is not None,
                                   "%s requires CheckpointDecoder" % self.config.early_stopping_metric)
 
-        if getattr(train_iter, 'competence', None) is not None:
-            logger.info("Training with curriculum learning with the %s competence kind, "
-                        "initial competence value: %f." % (train_iter.competence.kind, train_iter.competence.value()))
+        has_bandit = hasattr(train_iter, 'bandit')
+        if has_bandit:
+            logger.info("Training with bandit curriculum learning with the %s bandit" % train_iter.bandit.name())
 
         resume_training = os.path.exists(self.training_state_dirname)
         if resume_training:
@@ -228,7 +221,7 @@ class GluonEarlyStoppingTrainer:
                 logger.info("Maximum # of samples (%s) reached", self.config.max_samples)
                 break
 
-            self._step(batch=train_iter.next())
+            self._step(batch=train_iter.next(), train_iter=train_iter)
 
             if not train_iter.iter_next():
                 self.state.epoch += 1
@@ -247,6 +240,11 @@ class GluonEarlyStoppingTrainer:
                             self.state.samples, time_cost, self.config.checkpoint_interval / time_cost)
                 logger.info('Checkpoint [%d]\t%s', self.state.checkpoint,
                             "\t".join("Train-%s" % str(lf.metric) for lf in self.loss_functions))
+                # If we have a bandit iterator, log bandit probabilities
+                if has_bandit:
+                    logger.info("Checkpoint [%d]\tTrain-bandit-probs=%s\tTrain-bandit-avg-reward=%s", self.state.checkpoint,
+                                train_iter.bandit.probabilities(), train_iter.bandit.avg_rewards())
+
                 safe_custom_metrics_logger(logging_function=self._custom_metrics_logger,
                                            metrics=(lf.metric for lf in self.loss_functions),
                                            global_step=self.state.checkpoint)
@@ -287,7 +285,7 @@ class GluonEarlyStoppingTrainer:
         self._cleanup(keep_training_state=True)
         return self.state
 
-    def _forward_backward(self, batch: data_io.Batch):
+    def _forward_backward(self, batch: data_io.Batch, call_backward: bool = True):
         """
         Performs forward-backward pass on a batch in data-parallel mode.
 
@@ -299,7 +297,7 @@ class GluonEarlyStoppingTrainer:
 
         # send sharded inputs to the backend
         for inputs, labels in batch.shards():
-            self._parallel.put((inputs, labels))
+            self._parallel.put((inputs, labels), call_backward)
 
         # get outputs from parallel requests to the backend. Each shard output contains a list of tuples, one for each
         # loss function of the form: (loss_value, num_samples).
@@ -314,13 +312,24 @@ class GluonEarlyStoppingTrainer:
             sharded_outputs_per_loss_function]
         return output_per_loss_function
 
-    def _step(self, batch: data_io.Batch):
+    def _step(self, batch: data_io.Batch, train_iter: data_io.BaseParallelSampleIter):
         self.state.batches += 1
         loss_outputs = self._forward_backward(batch)
         if self.config.update_interval == 1 or self.state.batches % self.config.update_interval == 0:
-            # `step` rescales the gradients for the number of batches in this
-            # update.
+            # `step` rescales the gradients for the number of batches in this update.
             self.trainer.step(batch_size=self.config.update_interval)
+
+            # let the bandit know about the gradient norm
+            if hasattr(train_iter, 'update'):
+                reward = data_io.bandit_reward(self, batch, train_iter.bandit,
+                                               loss_outputs = loss_outputs)
+                perplexity, num_samples = None, None
+                for loss_func, (loss_val, num) in zip(self.loss_functions, loss_outputs):
+                    if loss_func.name == C.CROSS_ENTROPY:
+                        perplexity, num_samples = loss_val, num
+                        break
+                train_iter.update(reward, perplexity, num_samples)
+
             if self.config.update_interval > 1:
                 # Multi-batch updates sum gradients for each batch instead of
                 # overwriting, so gradients must be manually zeroed after each
@@ -334,7 +343,8 @@ class GluonEarlyStoppingTrainer:
         self._speedometer(self.state.epoch, self.state.batches,
                           self.state.updates, batch.samples, batch.tokens, (lf.metric for lf in self.loss_functions))
 
-    def _evaluate(self, checkpoint: int, data_iter, checkpoint_decoder: Optional[CheckpointDecoder]) -> List[loss.LossMetric]:
+    def _evaluate(self, checkpoint: int, data_iter,
+                  checkpoint_decoder: Optional[CheckpointDecoder]) -> List[loss.LossMetric]:
         """
         Computes loss(es) on validation data and returns their metrics.
         :param data_iter: Validation data iterator.
@@ -342,9 +352,12 @@ class GluonEarlyStoppingTrainer:
         """
         data_iter.reset()
         val_metrics = [lf.create_metric() for lf in self.loss_functions]
+        has_bandit = hasattr(data_iter, 'bandit')
+        if has_bandit:
+            cluster_metrics = [[lf.create_metric() for lf in self.loss_functions] for _ in data_iter.cluster_iters]
+        sharded_loss_outputs = []
         for batch in data_iter:
             batch = batch.split_and_load(ctx=self.context)
-            sharded_loss_outputs = []  # type: List[List[Tuple[mx.nd.NDArray, mx.nd.NDArray]]]
             for inputs, labels in batch.shards():
                 outputs = self.model(*inputs)  # type: Dict[str, mx.nd.NDArray]
                 loss_outputs = [loss_function(outputs, labels) for loss_function in self.loss_functions]
@@ -358,19 +371,26 @@ class GluonEarlyStoppingTrainer:
             # update validation metrics for batch
             for loss_metric, (loss_value, num_samples) in zip(val_metrics, output_per_loss_function):
                 loss_metric.update(loss_value.asscalar(), num_samples.asscalar())
+            # update validation metrics for bandit for the selected cluster
+            if has_bandit:
+                for loss_metric, (loss_value, num_samples) in zip(cluster_metrics[data_iter.action], output_per_loss_function):
+                    loss_metric.update(loss_value.asscalar(), num_samples.asscalar())
 
         # Optionally run the checkpoint decoder
         if checkpoint_decoder is not None:
             output_name = os.path.join(self.config.output_dir, C.DECODE_OUT_NAME % checkpoint)
-            decoder_metrics = checkpoint_decoder.decode_and_evaluate(output_name=output_name)
+            decoder_metrics = checkpoint_decoder.decode_and_evaluate(output_name=output_name, shard_into_clusters=has_bandit)
             for metric_name, metric_value in decoder_metrics.items():
                 assert metric_name not in val_metrics, "Duplicate validation metric %s" % metric_name
                 metric = loss.LossMetric(name=metric_name)
                 metric.update(metric_value, num_samples=1)
                 val_metrics.append(metric)
+                if has_bandit:
+                    cluster_metrics[data_iter.action].append(metric)
 
         logger.info('Checkpoint [%d]\t%s',
                     self.state.checkpoint, "\t".join("Validation-%s" % str(lm) for lm in val_metrics))
+
         safe_custom_metrics_logger(logging_function=self._custom_metrics_logger,
                                    metrics=val_metrics,
                                    global_step=self.state.checkpoint)
@@ -705,14 +725,23 @@ class ParallelModel(parallel.Parallelizable):
         self.trainer = trainer
         self.using_amp = using_amp
 
-    def forward_backward(self, shard: Tuple) -> List[Tuple[mx.nd.NDArray, mx.nd.NDArray]]:
+    def forward_backward(self, shard: Tuple, call_backward: bool = True) -> List[Tuple[mx.nd.NDArray, mx.nd.NDArray]]:
         """
         Applies forward-backward pass for a single shard of a batch (data-parallel training).
         """
         inputs, labels = shard
-        with mx.autograd.record():
+
+        def get_loss_outputs():
             outputs = self.model(*inputs)  # type: Dict[str, mx.nd.NDArray]
             loss_outputs = [loss_function(outputs, labels) for loss_function in self.loss_functions]
+            return loss_outputs
+
+        if not call_backward:
+            loss_outputs = get_loss_outputs()
+            return loss_outputs
+
+        with mx.autograd.record():
+            loss_outputs = get_loss_outputs()
             loss_values = (v for v, _ in loss_outputs)
             sum_losses = mx.nd.add_n(*loss_values)
             if self.using_amp:

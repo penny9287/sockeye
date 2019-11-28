@@ -76,6 +76,7 @@ def prepare_data(args: argparse.Namespace):
 
     data_io.prepare_data(source_fnames=source_paths,
                          target_fname=args.target,
+                         difficulty_fname=args.difficulty,
                          source_vocabs=source_vocabs,
                          target_vocab=target_vocab,
                          source_vocab_paths=source_vocab_paths,
@@ -88,7 +89,8 @@ def prepare_data(args: argparse.Namespace):
                          samples_per_shard=samples_per_shard,
                          min_num_shards=minimum_num_shards,
                          output_prefix=output_folder,
-                         bucket_scaling=bucket_scaling)
+                         bucket_scaling=bucket_scaling,
+                         num_clusters=args.num_clusters)
 
 
 if __name__ == "__main__":

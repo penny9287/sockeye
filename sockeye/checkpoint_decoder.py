@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import time
+import itertools
 from contextlib import ExitStack
 from typing import Any, Dict, Optional, List
 
@@ -64,6 +65,7 @@ class CheckpointDecoder:
                  model_folder: str,
                  inputs: List[str],
                  references: str,
+                 difficulties: Optional[str],
                  source_vocabs: List[vocab.Vocab],
                  target_vocab: vocab.Vocab,
                  model: sockeye.model.SockeyeModel,
@@ -98,16 +100,26 @@ class CheckpointDecoder:
             inputs_sentences = [f.readlines() for f in inputs_fins]
             target_sentences = references_fin.readlines()
 
+            if difficulties is not None:
+                input_difficulties = list(data_io.JsonReader(difficulties))
+
             utils.check_condition(all(len(l) == len(target_sentences) for l in inputs_sentences),
                                   "Sentences differ in length")
 
             if sample_size <= 0:
                 sample_size = len(inputs_sentences[0])
-            if sample_size < len(inputs_sentences[0]):
-                self.target_sentences, *self.inputs_sentences = parallel_subsample(
-                    [target_sentences] + inputs_sentences, sample_size, random_seed)
+            if difficulties is not None:
+                if sample_size < len(inputs_sentences[0]):
+                    self.target_sentences, self.input_difficulties, *self.inputs_sentences = parallel_subsample(
+                        [target_sentences] + input_difficulties + inputs_sentences, sample_size, random_seed)
+                else:
+                    self.inputs_sentences, self.input_difficulties, self.target_sentences = inputs_sentences, input_difficulties, target_sentences
             else:
-                self.inputs_sentences, self.target_sentences = inputs_sentences, target_sentences
+                if sample_size < len(inputs_sentences[0]):
+                    self.target_sentences, *self.inputs_sentences = parallel_subsample(
+                        [target_sentences] + inputs_sentences, sample_size, random_seed)
+                else:
+                    self.inputs_sentences, self.target_sentences = inputs_sentences, target_sentences
 
             if sample_size < self.batch_size:
                 self.batch_size = sample_size
@@ -142,7 +154,8 @@ class CheckpointDecoder:
                     max_input_len if max_input_len is not None else -1, beam_size, len(self.target_sentences))
 
     def decode_and_evaluate(self,
-                            output_name: str = os.devnull) -> Dict[str, float]:
+                            output_name: str = os.devnull,
+                            shard_into_clusters: bool = False) -> Dict[str, float]:
         """
         Decodes data set and evaluates given a checkpoint.
 
@@ -167,21 +180,35 @@ class CheckpointDecoder:
         avg_time = trans_wall_time / len(self.target_sentences)
 
         # 2. Evaluate
-        return {C.BLEU: evaluate.raw_corpus_bleu(hypotheses=translations,
-                                                 references=self.target_sentences,
-                                                 offset=0.01),
-                C.CHRF: evaluate.raw_corpus_chrf(hypotheses=translations,
-                                                 references=self.target_sentences),
-                C.ROUGE1: evaluate.raw_corpus_rouge1(hypotheses=translations,
-                                                     references=self.target_sentences),
-                C.ROUGE2: evaluate.raw_corpus_rouge2(hypotheses=translations,
-                                                     references=self.target_sentences),
-                C.ROUGEL: evaluate.raw_corpus_rougel(hypotheses=translations,
-                                                     references=self.target_sentences),
-                C.LENRATIO: evaluate.raw_corpus_length_ratio(hypotheses=translations,
-                                                             references=self.target_sentences),
-                C.AVG_TIME: avg_time,
-                C.DECODING_TIME: trans_wall_time}
+        # 2.0 Define a helper
+        def _metrics(hypotheses, references, suffix=''):
+            return {C.BLEU + suffix: evaluate.raw_corpus_bleu(hypotheses=hypotheses,
+                                                     references=references,
+                                                     offset=0.01),
+                    C.CHRF + suffix: evaluate.raw_corpus_chrf(hypotheses=hypotheses,
+                                                     references=references),
+                    C.ROUGE1 + suffix: evaluate.raw_corpus_rouge1(hypotheses=hypotheses,
+                                                     references=references),
+                    C.ROUGE2 + suffix: evaluate.raw_corpus_rouge2(hypotheses=hypotheses,
+                                                     references=references),
+                    C.ROUGEL + suffix: evaluate.raw_corpus_rougel(hypotheses=hypotheses,
+                                                     references=references),
+                    C.LENRATIO + suffix: evaluate.raw_corpus_length_ratio(hypotheses=hypotheses,
+                                                     references=references)}
+        # 2.1 Global metrics
+        metrics = _metrics(translations, self.target_sentences)
+        metrics.update({C.AVG_TIME: avg_time,
+                        C.DECODING_TIME: trans_wall_time})
+
+        # 2.2 per cluster metrics
+        if shard_into_clusters:
+            sorted_by_clusters = sorted(zip(self.input_difficulties, translations, self.target_sentences),                                                 
+                                        key=lambda triple: triple[0])
+            for cluster_id, triple in itertools.groupby(sorted_by_clusters, key=lambda triple: triple[0]):
+                _, hyps, refs = zip(*list(triple))
+                metrics.update(_metrics(hyps, refs, str(cluster_id)))
+
+        return metrics
 
 
 def parallel_subsample(parallel_sequences: List[List[Any]], sample_size: int, seed: int) -> List[Any]:

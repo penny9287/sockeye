@@ -373,22 +373,57 @@ def add_training_data_args(params, required=False):
 
 
 def add_curriculum_args(params):
-    params.add_argument("--bandit-kind",
+    params.add_argument("--bandit",
+                        default=False,
+                        action='store_true',
+                        help='Use bandit learning.')
+    params.add_argument("--bandit-type",
                         required=False,
-                        default=None,
-                        choices=['linucb', 'ucb', 'ts', 'lints', 'exp3s', 'linexp3s'],
+                        default='none',
+                        choices=['none', 'linucb', 'ucb', 'ts', 'lints', 'exp3s', 'linexp3s'],
                         type=str,
                         help='Type of the bandit.')
-    params.add_argument("--exploration-epochs",
+    params.add_argument("--bandit-reward",
                         required=False,
-                        default=1,
+                        default='gpg',
+                        choices=['pg', 'pgnorm', 'gpg', 'loss'],
+                        type=str,
+                        help='Bandit loss/reward type.')
+    params.add_argument("--bandit-learn-rate",
+                        required=False,
+                        default=None,
+                        type=float,
+                        help='Bandit learning rate (gamma).')
+    params.add_argument("--bandit-explore-rate",
+                        required=False,
+                        default=None,
+                        type=float,
+                        help='Bandit exploration rate (alpha).')
+    params.add_argument("--bandit-time-limit",
+                        required=False,
+                        default=None,
                         type=int,
-                        help='The number of epochs to explore before starting curriculum. Default: %(default)s.')
+                        help='Bandit time limit (T).')
+    params.add_argument("--bandit-tau",
+                        required=False,
+                        default=False,
+                        action='store_true',
+                        help='Use tau normalization.')
+    params.add_argument("--bandit-noemb",
+                        required=False,
+                        default=False,
+                        action='store_true',
+                        help='Do not include embeddings into gradient calculation (applicable to GPG).')
+    params.add_argument("--bandit-exploration-updates",
+                        required=False,
+                        default=C.MIN_RESERVOIR_SIZE,
+                        type=int,
+                        help='The number of updates to explore before starting curriculum. Default: %(default)s.')
 
 
-def add_validation_data_params(params):
+def add_validation_data_params(params, required = True):
     params.add_argument('--validation-source', '-vs',
-                        required=True,
+                        required=required,
                         type=regular_file(),
                         help='Source side of validation data.')
     params.add_argument('--validation-source-factors', '-vsf',
@@ -399,15 +434,20 @@ def add_validation_data_params(params):
                         help='File(s) containing additional token-parallel validation source side factors. '
                              'Default: %(default)s.')
     params.add_argument('--validation-target', '-vt',
-                        required=True,
+                        required=required,
                         type=regular_file(),
                         help='Target side of validation data.')
+    params.add_argument('--validation-difficulty', '-vd',
+                        required=False,
+                        type=regular_file(),
+                        help='Difficluties of validation data.')
+
 
 
 def add_prepared_data_args(params):
     params.add_argument(C.TRAINING_ARG_PREPARED_DATA, '-d',
                         type=regular_folder(),
-                        help='Prepared training data directory created through python -m sockeye.prepare_data.')
+                        help='Prepared data directory created through python -m sockeye.prepare_data.')
 
 
 def add_monitoring_args(params):
@@ -474,6 +514,12 @@ def add_prepare_data_cli_args(params):
     add_vocab_args(params)
     add_bucketing_args(params)
 
+    params.add_argument('--num-clusters',
+                        required=False,
+                        type=int,
+                        default=1,
+                        help='Number of clusters data in difficulties. Assumes these are single-value difficulties.')
+
     params.add_argument('--num-samples-per-shard',
                         type=int_greater_or_equal(1),
                         default=1000000,
@@ -493,6 +539,7 @@ def add_prepare_data_cli_args(params):
     params.add_argument('--output', '-o',
                         required=True,
                         help='Folder where the prepared and possibly sharded data is written to.')
+    add_logging_args(params)
 
 
 def add_device_args(params):
@@ -965,6 +1012,7 @@ def add_train_cli_args(params):
     add_training_io_args(params)
     add_model_parameters(params)
     add_training_args(params)
+    add_curriculum_args(params)
     add_device_args(params)
     add_logging_args(params)
     add_hybridization_arg(params)

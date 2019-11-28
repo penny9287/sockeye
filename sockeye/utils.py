@@ -787,3 +787,11 @@ def log_parameters(params: mx.gluon.ParameterDict):
     #logger.info("Fixing %d parameters (%0.2f%%)", fixed_parameters, percent_fixed)
     #logger.info("Learning %d parameters (%0.2f%%)", learned_parameters, percent_learned)
     #logger.info("Total # of parameters: %d", total_parameters)
+
+
+def global_norm(ndarrays: List[mx.nd.NDArray]) -> float:
+    # accumulate in a list, as asscalar is blocking and this way we can run the norm calculation in parallel.
+    norms = [mx.nd.square(mx.nd.norm(arr)) for arr in ndarrays if arr is not None]
+    return math.sqrt(sum(norm.asscalar() for norm in norms))
+
+
