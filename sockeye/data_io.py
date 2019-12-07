@@ -37,7 +37,6 @@ from . import config
 from . import constants as C
 from . import horovod_mpi
 from . import vocab
-from . import loss
 from .utils import check_condition, smart_open, get_tokens, OnlineMeanAndVariance, global_norm
 
 logger = logging.getLogger(__name__)
@@ -452,7 +451,7 @@ def shard_data(source_fnames: List[str],
 
             buck_idx, buck = get_parallel_bucket(buckets, source_len, target_len)
             data_stats_accumulator.sequence_pair(sources[0], target, buck_idx, difficulty)
-            
+
             per_shard_stat_accumulators[key].sequence_pair(sources[0], target, buck_idx, difficulty)
 
             if buck is None:
@@ -757,7 +756,7 @@ def get_validation_data_iter(data_loader: RawParallelDatasetLoader,
 
     validation_data_statistics.log(bucket_batch_sizes)
 
-    # if difficulties are specified, to support clusters we create a bandit iterator 
+    # if difficulties are specified, to support clusters we create a bandit iterator
     # but that does NOT sample them
     if validation_difficulty is not None:
         validation_datasets = [dataset.fill_up(bucket_batch_sizes) \
@@ -1560,7 +1559,7 @@ class ParallelDataSet(Sized):
         if difficulties is None:
             check_condition(len(source) == len(target),
                 "Number of buckets for source/target do not match: %d/%d." % (len(source), len(target)))
-                # using numpy since mxnet does not allow creating zero-shaped arrays 
+                # using numpy since mxnet does not allow creating zero-shaped arrays
             difficulties = [mx.nd.from_numpy(np.full((s.shape[0]), C.CONSTANT_DIFFICULTY_VALUE), zero_copy=True) for s in source]
         else:
             check_condition(len(source) == len(target) == len(difficulties),
@@ -1942,7 +1941,6 @@ class BatchedRawParallelSampleIter(BaseParallelSampleIter):
         raise NotImplementedError('Not supported!')
 
 
-
 class ParallelSampleIter(BaseParallelSampleIter):
     """
     Data iterator on a bucketed ParallelDataSet. Shuffles data at every reset and supports saving and loading the
@@ -2280,7 +2278,7 @@ class Reservoir:
         self.reservoir = []
         self.reservoir_size = reservoir_size
         self.count = 0
-    
+
     def update(self, value: Any):
         if self.count < self.reservoir_size:
             self.reservoir.append(value)
@@ -2297,7 +2295,7 @@ class Reservoir:
 
 
 class Bandit:
-    def __init__(self, num_actions: int, 
+    def __init__(self, num_actions: int,
                  reservoir_size: int = C.MAX_RESERVOIR_SIZE, min_num_rewards: int = C.MIN_RESERVOIR_SIZE,
                  low: float = 0.2, high: float = 0.8):
         self.reservoir = Reservoir(reservoir_size)
@@ -2370,7 +2368,7 @@ class Exp3SBandit(Bandit):
         self.num_actions = num_actions
 
         # TODO technically they are not properties of a bandit but of environment..
-        self.reward_type = reward_type 
+        self.reward_type = reward_type
         self.tau_normalization = tau_normalization
         self.no_embeddings = no_embeddings
 
@@ -2405,7 +2403,7 @@ class Exp3SBandit(Bandit):
         self.avg[action] = self.seen[action] * self.avg[action] + reward
         self.seen[action] += 1
         self.avg[action] /= self.seen[action]
-       
+
         # importance sampling adjusted reward vector
         adjusted_rewards = np.zeros((self.num_actions,))
         adjusted_rewards[action] = rescaled_reward / self.prob[action]
@@ -2497,10 +2495,10 @@ class BanditSampleIter(BaseParallelSampleIter):
         self.curr_batch_index += 1
         if self.permute:
             # random sampling
-            get_action_func = lambda: self.bandit.sample_actions(n=1)[0] 
+            get_action_func = lambda: self.bandit.sample_actions(n=1)[0]
         else:
             # non-random sequential getting
-            get_action_func = lambda: self.curr_batch_index % len(self.cluster_iters) 
+            get_action_func = lambda: self.curr_batch_index % len(self.cluster_iters)
         batch = self._get_batch_of_data(get_action_func)
         return batch
 
@@ -2575,7 +2573,7 @@ def bandit_reward(trainer,
                   bandit: Bandit,
                   loss_outputs: List) -> float:
     """
-    Calculate bandit reward based on the reward type. Is outside f the Bandit classes because 
+    Calculate bandit reward based on the reward type. Is outside f the Bandit classes because
     technically it belongs to environment.
     Returns reward.
     """
@@ -2616,6 +2614,8 @@ def bandit_reward(trainer,
     # Loss itselfs: L(x,w)
     elif bandit.reward_type == 'loss':
         reward = _sum_divide(loss_outputs)
+    elif bandit.reward_type == 'none':
+        return None
     else:
         raise ValueError("Unknown bandit reward type")
 

@@ -21,6 +21,7 @@ import pickle
 import random
 import shutil
 import time
+import itertools
 from typing import Callable, Dict, List, Optional, Iterable, Tuple, Union
 
 import mxnet as mx
@@ -242,8 +243,13 @@ class GluonEarlyStoppingTrainer:
                             "\t".join("Train-%s" % str(lf.metric) for lf in self.loss_functions))
                 # If we have a bandit iterator, log bandit probabilities
                 if has_bandit:
-                    logger.info("Checkpoint [%d]\tTrain-bandit-probs=%s\tTrain-bandit-avg-reward=%s", self.state.checkpoint,
-                                train_iter.bandit.probabilities(), train_iter.bandit.avg_rewards())
+                    probs = train_iter.bandit.prob
+                    avgrewards = train_iter.bandit.avg
+                    str_metrics = list()
+                    for idx, (p, r) in enumerate(zip(probs, avgrewards)):
+                        str_metrics.append("Train-bandit-probs[%d]=%f" % (idx, p))
+                        str_metrics.append("Train-bandit-avg-reward[%d]=%f" % (idx, r))
+                    logger.info("Checkpoint [%d]\t%s", self.state.checkpoint, ' '.join(str_metrics))
 
                 safe_custom_metrics_logger(logging_function=self._custom_metrics_logger,
                                            metrics=(lf.metric for lf in self.loss_functions),
@@ -328,7 +334,8 @@ class GluonEarlyStoppingTrainer:
                     if loss_func.name == C.CROSS_ENTROPY:
                         perplexity, num_samples = loss_val, num
                         break
-                train_iter.update(reward, perplexity, num_samples)
+                if reward is not None:  # 'none' bandit can return None
+                    train_iter.update(reward, perplexity, num_samples)
 
             if self.config.update_interval > 1:
                 # Multi-batch updates sum gradients for each batch instead of
@@ -352,9 +359,10 @@ class GluonEarlyStoppingTrainer:
         """
         data_iter.reset()
         val_metrics = [lf.create_metric() for lf in self.loss_functions]
-        has_bandit = hasattr(data_iter, 'bandit')
+        has_bandit = hasattr(data_iter, 'cluster_iters')
         if has_bandit:
-            cluster_metrics = [[lf.create_metric() for lf in self.loss_functions] for _ in data_iter.cluster_iters]
+            cluster_metrics = [[lf.create_metric(suffix="[%d]" % idx) \
+                                for lf in self.loss_functions] for idx in range(len(data_iter.cluster_iters))]
         sharded_loss_outputs = []
         for batch in data_iter:
             batch = batch.split_and_load(ctx=self.context)
@@ -375,6 +383,10 @@ class GluonEarlyStoppingTrainer:
             if has_bandit:
                 for loss_metric, (loss_value, num_samples) in zip(cluster_metrics[data_iter.action], output_per_loss_function):
                     loss_metric.update(loss_value.asscalar(), num_samples.asscalar())
+        
+        # copy cluster_metrics into val_metrics:
+        if has_bandit:
+            val_metrics.extend(itertools.chain.from_iterable(cluster_metrics))
 
         # Optionally run the checkpoint decoder
         if checkpoint_decoder is not None:
@@ -385,11 +397,9 @@ class GluonEarlyStoppingTrainer:
                 metric = loss.LossMetric(name=metric_name)
                 metric.update(metric_value, num_samples=1)
                 val_metrics.append(metric)
-                if has_bandit:
-                    cluster_metrics[data_iter.action].append(metric)
 
         logger.info('Checkpoint [%d]\t%s',
-                    self.state.checkpoint, "\t".join("Validation-%s" % str(lm) for lm in val_metrics))
+                    self.state.checkpoint, " ".join("Validation-%s" % str(lm) for lm in val_metrics))
 
         safe_custom_metrics_logger(logging_function=self._custom_metrics_logger,
                                    metrics=val_metrics,

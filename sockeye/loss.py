@@ -66,7 +66,7 @@ class Loss(mx.gluon.HybridBlock):
         raise NotImplementedError()
 
     @abstractmethod
-    def create_metric(self) -> 'LossMetric':
+    def create_metric(self, suffix: str = '') -> 'LossMetric':
         """
         Create an instance of the EvalMetric that corresponds to this Loss function.
         """
@@ -168,11 +168,11 @@ class CrossEntropyLoss(Loss):
         ce = -F.sum(pred)
         return ce, F.sum(valid_mask)
 
-    def create_metric(self) -> 'LossMetric':
+    def create_metric(self, suffix: str = '') -> 'LossMetric':
         """
         Create an instance of the EvalMetric that corresponds to this Loss function.
         """
-        return PerplexityMetric()
+        return PerplexityMetric(suffix=suffix)
 
 
 class CrossEntropyLossWithoutSoftmaxOutput(Loss):
@@ -214,11 +214,11 @@ class CrossEntropyLossWithoutSoftmaxOutput(Loss):
         ce = F.sum(loss) * self.weight
         return ce, F.sum(valid_mask)
 
-    def create_metric(self) -> 'LossMetric':
+    def create_metric(self, suffix: str = '') -> 'LossMetric':
         """
         Create an instance of the EvalMetric that corresponds to this Loss function.
         """
-        return PerplexityMetric()
+        return PerplexityMetric(suffix=suffix)
 
 
 class LabelSmoothing(mx.gluon.HybridBlock):
@@ -281,8 +281,8 @@ class LabelSmoothing(mx.gluon.HybridBlock):
 
 class PerplexityMetric(LossMetric):
 
-    def __init__(self, name=C.PERPLEXITY):
-        super().__init__(name=name)
+    def __init__(self, name=C.PERPLEXITY, suffix=''):
+        super().__init__(name=name + suffix)
 
     def update(self, batch_cross_entropy: float, batch_num_valid: float):
         self._sum += batch_cross_entropy
@@ -321,8 +321,8 @@ class PoissonLoss(Loss):
         num_samples = F.sum(F.ones_like(length_predictions))
         return loss, num_samples
 
-    def create_metric(self) -> 'LossMetric':
-        return LossMetric(name=C.LENRATIO_MSE)
+    def create_metric(self, suffix: str = '') -> 'LossMetric':
+        return LossMetric(name=C.LENRATIO_MSE, suffix=suffix)
 
 
 class MSELoss(Loss):
@@ -353,5 +353,5 @@ class MSELoss(Loss):
         num_samples = F.sum(F.ones_like(length_predictions))
         return loss, num_samples
 
-    def create_metric(self) -> 'LossMetric':
-        return LossMetric(name=C.LENRATIO_MSE)
+    def create_metric(self, suffix: str = '') -> 'LossMetric':
+        return LossMetric(name=C.LENRATIO_MSE, suffix=suffix)

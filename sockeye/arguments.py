@@ -385,10 +385,10 @@ def add_curriculum_args(params):
                         help='Type of the bandit.')
     params.add_argument("--bandit-reward",
                         required=False,
-                        default='gpg',
-                        choices=['pg', 'pgnorm', 'gpg', 'loss'],
+                        default='none',
+                        choices=['pg', 'pgnorm', 'gpg', 'loss', 'none'],
                         type=str,
-                        help='Bandit loss/reward type.')
+                        help='Bandit loss/reward type; none switches bandit off')
     params.add_argument("--bandit-learn-rate",
                         required=False,
                         default=None,
@@ -421,9 +421,9 @@ def add_curriculum_args(params):
                         help='The number of updates to explore before starting curriculum. Default: %(default)s.')
 
 
-def add_validation_data_params(params, required = True):
+def add_validation_data_params(params):
     params.add_argument('--validation-source', '-vs',
-                        required=required,
+                        required=True,
                         type=regular_file(),
                         help='Source side of validation data.')
     params.add_argument('--validation-source-factors', '-vsf',
@@ -434,7 +434,7 @@ def add_validation_data_params(params, required = True):
                         help='File(s) containing additional token-parallel validation source side factors. '
                              'Default: %(default)s.')
     params.add_argument('--validation-target', '-vt',
-                        required=required,
+                        required=True,
                         type=regular_file(),
                         help='Target side of validation data.')
     params.add_argument('--validation-difficulty', '-vd',
@@ -447,7 +447,7 @@ def add_validation_data_params(params, required = True):
 def add_prepared_data_args(params):
     params.add_argument(C.TRAINING_ARG_PREPARED_DATA, '-d',
                         type=regular_folder(),
-                        help='Prepared data directory created through python -m sockeye.prepare_data.')
+                        help='Prepared training data directory created through python -m sockeye.prepare_data.')
 
 
 def add_monitoring_args(params):

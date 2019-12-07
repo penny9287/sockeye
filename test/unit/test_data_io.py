@@ -548,83 +548,69 @@ def _data_batches_equal(db1: data_io.Batch, db2: data_io.Batch) -> bool:
     equal = equal and db1.tokens == db2.tokens
     return equal
 
-##@pytest.mark.parametrize("iter_cls", [data_io.ParallelSampleIter, data_io.ParallelCurriculumSampleIter])
-#@pytest.mark.parametrize("iter_cls", [data_io.ParallelCurriculumSampleIter])
-#def test_parallel_sample_iter(iter_cls):
-#    random.seed(42)
-#    batch_size = 2
-#    buckets = data_io.define_parallel_buckets(100, 100, 10, 1, 1.0)
-#    # The first bucket is going to be empty:
-#    bucket_counts = [0] + [None] * (len(buckets) - 1)
-#    bucket_batch_sizes = data_io.define_bucket_batch_sizes(buckets,
-#                                                           batch_size,
-#                                                           batch_by_words=False,
-#                                                           batch_num_devices=1,
-#                                                           data_target_average_len=[None] * len(buckets))
+@pytest.mark.parametrize("iter_cls", data_io.ParallelSampleIter)
+def test_parallel_sample_iter(iter_cls):
+    random.seed(42)
+    batch_size = 2
+    buckets = data_io.define_parallel_buckets(100, 100, 10, 1, 1.0)
+    # The first bucket is going to be empty:
+    bucket_counts = [0] + [None] * (len(buckets) - 1)
+    bucket_batch_sizes = data_io.define_bucket_batch_sizes(buckets,
+                                                           batch_size,
+                                                           batch_by_words=False,
+                                                           batch_num_devices=1,
+                                                           data_target_average_len=[None] * len(buckets))
 
-#    dataset = data_io.ParallelDataSet(*_get_random_bucketed_data(buckets, min_count=0, max_count=5,
-#                                                                 bucket_counts=bucket_counts,
-#                                                                 generate_difficulty=(iter_cls == data_io.ParallelCurriculumSampleIter)))
-#    it = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
+    dataset = data_io.ParallelDataSet(*_get_random_bucketed_data(buckets, min_count=0, max_count=5,
+                                                                 bucket_counts=bucket_counts,
+                                                                 generate_difficulty=(iter_cls == data_io.ParallelCurriculumSampleIter)))
+    it = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
 
-#    print("***SOURCE\n", dataset.source)
-#    print("***TARGET/LABEL\n", dataset.target)
-#    print("***DIFF\n", dataset.difficulties)
+    args = (dataset, buckets, batch_size, bucket_batch_sizes)
 
-#    args = (dataset, buckets, batch_size, bucket_batch_sizes)
-#    if iter_cls == data_io.ParallelCurriculumSampleIter:
-#        competence = data_io.Competence('linear', max_epochs=0.5, min_competence=0.7)
-#        competence.init(epoch_size=2)
-#        args = args + (competence,)
+    it = iter_cls(*args)
 
-#    it = iter_cls(*args)
+    with TemporaryDirectory() as work_dir:
+        # Test 1
+        it.next()
+        expected_batch = it.next()
 
-#    with TemporaryDirectory() as work_dir:
-#        # Test 1
-#        it.next()
-#        expected_batch = it.next()
-#        print("EXPECTED\n", expected_batch.data)
+        fname = os.path.join(work_dir, "saved_iter")
+        it.save_state(fname)
 
-#        fname = os.path.join(work_dir, "saved_iter")
-#        it.save_state(fname)
+        it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
+        it_loaded.reset()
+        it_loaded.load_state(fname)
+        loaded_batch = it_loaded.next()
+        assert _data_batches_equal(expected_batch, loaded_batch)
 
-#        #it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
-#        it_loaded = iter_cls(*args)
-#        it_loaded.reset()
-#        it_loaded.load_state(fname)
-#        loaded_batch = it_loaded.next()
-#        print("LOADED\n", loaded_batch.data)
-#        assert _data_batches_equal(expected_batch, loaded_batch)
+        # Test 2
+        it.reset()
+        expected_batch = it.next()
+        it.save_state(fname)
 
-#        # Test 2
-#        it.reset()
-#        expected_batch = it.next()
-#        it.save_state(fname)
+        it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
+        it_loaded.reset()
+        it_loaded.load_state(fname)
 
-#        #it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
-#        it_loaded = iter_cls(*args)
-#        it_loaded.reset()
-#        it_loaded.load_state(fname)
+        loaded_batch = it_loaded.next()
+        assert _data_batches_equal(expected_batch, loaded_batch)
 
-#        loaded_batch = it_loaded.next()
-#        print(expected_batch, loaded_batch)
-#        assert _data_batches_equal(expected_batch, loaded_batch)
+        # Test 3
+        it.reset()
+        expected_batch = it.next()
+        it.save_state(fname)
+        it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
+        it_loaded.reset()
+        it_loaded.load_state(fname)
 
-#        # Test 3
-#        it.reset()
-#        expected_batch = it.next()
-#        it.save_state(fname)
-#        it_loaded = data_io.ParallelSampleIter(dataset, buckets, batch_size, bucket_batch_sizes)
-#        it_loaded.reset()
-#        it_loaded.load_state(fname)
+        loaded_batch = it_loaded.next()
+        assert _data_batches_equal(expected_batch, loaded_batch)
 
-#        loaded_batch = it_loaded.next()
-#        assert _data_batches_equal(expected_batch, loaded_batch)
-
-#        while it.iter_next():
-#            it.next()
-#            it_loaded.next()
-#        assert not it_loaded.iter_next()
+        while it.iter_next():
+            it.next()
+            it_loaded.next()
+        assert not it_loaded.iter_next()
 
 
 def test_sharded_parallel_sample_iter():
